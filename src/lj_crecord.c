@@ -1385,10 +1385,23 @@ static TRef crec_arith_ptr(jit_State *J, TRef *sp, CType **s, MMS mm)
       if (mm == MM_sub) {  /* Pointer difference. */
 	TRef tr;
 	CTSize sz = lj_ctype_size(cts, ctype_cid(ctp->info));
+#ifdef LUAJIT_ENABLE_PATCH
+	if (sz == 0) {
+	  return 0;  /* NYI: integer division. */
+    }
+	tr = emitir(IRT(IR_SUB, IRT_INTP), sp[0], sp[1]);
+	if ((sz & (sz-1)) == 0) { /* special case: divide using bit-shift */
+	  tr = emitir(IRT(IR_BSAR, IRT_INTP), tr, lj_ir_kint(J, lj_fls(sz)));
+    }
+    else { /* general case: divide using division */
+	  tr = emitir(IRT(IR_DIV, IRT_INTP), tr, lj_ir_kint(J, sz));
+    }
+#else
 	if (sz == 0 || (sz & (sz-1)) != 0)
 	  return 0;  /* NYI: integer division. */
 	tr = emitir(IRT(IR_SUB, IRT_INTP), sp[0], sp[1]);
 	tr = emitir(IRT(IR_BSAR, IRT_INTP), tr, lj_ir_kint(J, lj_fls(sz)));
+#endif
 #if LJ_64
 	tr = emitconv(tr, IRT_NUM, IRT_INTP, 0);
 #endif
