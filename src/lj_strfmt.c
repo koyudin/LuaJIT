@@ -469,6 +469,15 @@ int lj_strfmt_putarg(lua_State *L, SBuf *sb, int arg, int retry)
 	lj_strfmt_putfchar(sb, sf, lj_lib_checkint(L, arg));
 	break;
       case STRFMT_PTR:  /* No formatting. */
+#ifdef LUAJIT_ENABLE_PATCH
+	if (tviscdata(o)) {
+	  GCcdata *cd = cdataV(o);
+	  if (cd->ctypeid == CTID_P_VOID || cd->ctypeid == CTID_P_CVOID) {
+	    lj_strfmt_putptr(sb, (void *)*(uintptr_t *)cdataptr(cd));
+	    break;
+	  }
+	}
+#endif
 	lj_strfmt_putptr(sb, lj_obj_ptr(G(L), o));
 	break;
       default:
