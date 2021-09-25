@@ -7,6 +7,7 @@
 */
 
 #include <stdio.h>
+#include <errno.h>
 
 #define lib_base_c
 #define LUA_LIB
@@ -28,6 +29,8 @@
 #if LJ_HASFFI
 #include "lj_ctype.h"
 #include "lj_cconv.h"
+#include "lj_cdata.h"
+#include "lj_carith.h"
 #endif
 #include "lj_bc.h"
 #include "lj_ff.h"
@@ -262,6 +265,101 @@ LJLIB_CF(select)		LJLIB_REC(.)
 
 LJLIB_ASM(tonumber)		LJLIB_REC(.)
 {
+#ifdef LUAJIT_ENABLE_PATCH
+  int32_t base = lj_lib_optint(L, 2, 10);
+
+  if (base == 10) {
+
+    TValue *o = lj_lib_checkany(L, 1);
+
+    if (tvisnumber(o)) {
+      copyTV(L, L->base-1-LJ_FR2, o);
+      return FFH_RES(1);
+    }
+
+    if (tvisstr(o)) {
+
+      StrScanFmt fmt = lj_strscan_scan((const uint8_t *)strdata(strV(o)), strV(o)->len, o,
+                                      (LJ_DUALNUM ? STRSCAN_OPT_TOINT : STRSCAN_OPT_TONUM) | (LJ_HASFFI ? (STRSCAN_OPT_LL | STRSCAN_OPT_IMAG) : 0));
+
+      if (fmt != STRSCAN_ERROR) {
+
+        GCcdata *cd;
+
+        if (fmt != STRSCAN_I64 && fmt != STRSCAN_U64 && fmt != STRSCAN_IMAG) {
+          copyTV(L, L->base-1-LJ_FR2, o);
+          return FFH_RES(1);
+        }
+
+        if (fmt == STRSCAN_IMAG) {
+          cd = lj_cdata_new_(L, CTID_COMPLEX_DOUBLE, 2 * sizeof(double));
+          ((double *)cdataptr(cd))[0] = 0;
+          ((double *)cdataptr(cd))[1] = numV(o);
+          setcdataV(L, L->base-1-LJ_FR2, cd);
+          return FFH_RES(1);
+        }
+        else {
+          cd = lj_cdata_new_(L, fmt==STRSCAN_I64 ? CTID_INT64 : CTID_UINT64, sizeof(o->u64));
+          *(uint64_t *)cdataptr(cd) = o->u64;
+          setcdataV(L, L->base-1-LJ_FR2, cd);
+          return FFH_RES(1);
+        }
+      }
+    }
+
+#if LJ_HASFFI
+    if (tviscdata(o)) {
+
+      CTState *cts = ctype_cts(L);
+      CType *ct = lj_ctype_rawref(cts, cdataV(o)->ctypeid);
+      if (ctype_isenum(ct->info)) ct = ctype_child(cts, ct);
+      if (ctype_isnum(ct->info) || ctype_iscomplex(ct->info)) {
+	if (LJ_DUALNUM && ctype_isinteger_or_bool(ct->info) &&
+	    ct->size <= 4 && !(ct->size == 4 && (ct->info & CTF_UNSIGNED))) {
+	  int32_t i;
+	  lj_cconv_ct_tv(cts, ctype_get(cts, CTID_INT32), (uint8_t *)&i, o, 0);
+	  setintV(L->base-1-LJ_FR2, i);
+	  return FFH_RES(1);
+	}
+	lj_cconv_ct_tv(cts, ctype_get(cts, CTID_DOUBLE),
+		       (uint8_t *)&(L->base-1-LJ_FR2)->n, o, 0);
+	return FFH_RES(1);
+      }
+    }
+#endif
+  } else {
+    const char *p = strdata(lj_lib_checkstr(L, 1));
+    char *ep;
+    unsigned int neg = 0;
+    unsigned long ul;
+    if (base < 2 || base > 36)
+      lj_err_arg(L, 2, LJ_ERR_BASERNG);
+    while (lj_char_isspace((unsigned char)(*p))) p++;
+    if (*p == '-') { p++; neg = 1; } else if (*p == '+') { p++; }
+    if (lj_char_isalnum((unsigned char)(*p))) {
+      ul = strtoul(p, &ep, base);
+      if (p != ep) {
+	while (lj_char_isspace((unsigned char)(*ep))) ep++;
+	if (*ep == '\0') {
+	  if (LJ_DUALNUM && LJ_LIKELY(ul < 0x80000000u+neg)) {
+	    if (neg) ul = (unsigned long)-(long)ul;
+	    setintV(L->base-1-LJ_FR2, (int32_t)ul);
+	  } else {
+	    lua_Number n = (lua_Number)ul;
+	    if (neg) n = -n;
+	    setnumV(L->base-1-LJ_FR2, n);
+	  }
+	  return FFH_RES(1);
+	}
+      }
+    }
+  }
+  setnilV(L->base-1-LJ_FR2);
+  return FFH_RES(1);
+}
+
+#else
+
   int32_t base = lj_lib_optint(L, 2, 10);
   if (base == 10) {
     TValue *o = lj_lib_checkany(L, 1);
@@ -318,6 +416,7 @@ LJLIB_ASM(tonumber)		LJLIB_REC(.)
   setnilV(L->base-1-LJ_FR2);
   return FFH_RES(1);
 }
+#endif
 
 LJLIB_ASM(tostring)		LJLIB_REC(.)
 {
